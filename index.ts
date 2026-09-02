@@ -9,10 +9,36 @@ import * as http from 'http';
 
 dotenv.config();
 
+let currentQR = '';
+
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Siyap.id WhatsApp Bot is alive!\n');
+    if (req.url === '/qr') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Siyap QR</title>
+                <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+            </head>
+            <body style="display:flex; justify-content:center; align-items:center; height:100vh; flex-direction:column; font-family:sans-serif;">
+                <h2>Scan QR WhatsApp Siyap.id</h2>
+                <div id="qrcode"></div>
+                <p>Jika layar ini kosong (tidak ada gambar QR), berarti bot SUDAH LOGIN & TERHUBUNG!</p>
+                <script>
+                    var qrStr = "${currentQR}";
+                    if(qrStr) {
+                        new QRCode(document.getElementById("qrcode"), { text: qrStr, width: 300, height: 300 });
+                    }
+                </script>
+            </body>
+            </html>
+        `);
+    } else {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('Siyap.id WhatsApp Bot is alive! Akses /qr untuk melihat QR Code.\n');
+    }
 }).listen(PORT, () => {
     console.log(`Ping server listening on port ${PORT}`);
 });
@@ -42,11 +68,15 @@ async function startBot() {
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-        if (qr) qrcode.generate(qr, { small: true });
+        if (qr) {
+            qrcode.generate(qr, { small: true });
+            currentQR = qr; // Menyimpan QR untuk ditampilkan di website
+        }
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect?.error as any)?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) startBot();
         } else if (connection === 'open') {
+            currentQR = ''; // Membersihkan layar web setelah sukses login
             console.log('✅ BOT BERHASIL TERHUBUNG KE WHATSAPP 24/7!');
         }
     });
@@ -65,7 +95,6 @@ async function startBot() {
 
         const currentState = await redis.get<string>(userStateKey(senderPhone));
 
-        // Jika menerima Location (Sharelock)
         if (location) {
             if (currentState === 'AWAITING_PICKUP_LOC') {
                 await redis.hset(draftOrderKey(senderPhone), { 
@@ -80,7 +109,6 @@ async function startBot() {
                 const draft = await redis.hgetall(draftOrderKey(senderPhone));
                 if (draft) {
                     try {
-                        // Menyimpan pesanan resmi ke Supabase
                         const res = await pool.query(`
                             INSERT INTO orders (status, order_type, pickup_geom, dropoff_geom, shipping_fee, app_commission)
                             VALUES ('SEARCHING_DRIVER', $1, ST_SetSRID(ST_MakePoint($2, $3), 4326), ST_SetSRID(ST_MakePoint($4, $5), 4326), 15000, 3000)
@@ -95,12 +123,11 @@ async function startBot() {
                 }
                 await redis.del(userStateKey(senderPhone));
             } else {
-                await reply('Lokasi diterima! Namun Anda belum berada dalam sesi pemesanan. Ketik "halo" untuk mulai.');
+                await reply('Lokasi diterima! Namun Anda belum memesan layanan. Ketik "halo" untuk mulai.');
             }
             return;
         }
 
-        // Jika menerima Teks Biasa
         if (text) {
             const lowerText = text.trim().toLowerCase();
             
